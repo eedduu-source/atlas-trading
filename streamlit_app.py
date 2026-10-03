@@ -13,17 +13,31 @@ st.caption('Precios diarios: Stooq · Fundamentales regulatorios: SEC EDGAR · Y
 
 @st.cache_data(ttl=900)
 def stooq_history(symbol):
-    symbol = symbol.strip().lower()
+    original = symbol.strip().upper()
+    symbol = original.lower()
     if '.' not in symbol and symbol not in {'spy', 'qqq'}:
         symbol = f'{symbol}.us'
     end = date.today()
     start = end - timedelta(days=365 * 5)
     url = 'https://stooq.com/q/d/l/'
-    response = requests.get(url, params={'s': symbol, 'i': 'd', 'd1': start.strftime('%Y%m%d'), 'd2': end.strftime('%Y%m%d')}, timeout=20)
-    response.raise_for_status()
-    frame = pd.read_csv(io.StringIO(response.text))
+    try:
+        response = requests.get(url, params={'s': symbol, 'i': 'd', 'd1': start.strftime('%Y%m%d'), 'd2': end.strftime('%Y%m%d')}, timeout=8)
+        response.raise_for_status()
+        frame = pd.read_csv(io.StringIO(response.text))
+    except requests.RequestException:
+        frame = pd.DataFrame()
     if frame.empty or 'Close' not in frame:
-        raise ValueError('Stooq no devolvió histórico para ese ticker.')
+        # Fallback gratuito de Nasdaq para acciones y ETF estadounidenses.
+        nasdaq_url = f'https://api.nasdaq.com/api/quote/{original}/historical'
+        response = requests.get(nasdaq_url, params={'assetclass': 'stocks', 'fromdate': start.isoformat(), 'todate': end.isoformat(), 'limit': 5000}, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/plain, */*'}, timeout=20)
+        response.raise_for_status()
+        rows = response.json().get('data', {}).get('tradesTable', {}).get('rows', [])
+        if not rows:
+            raise ValueError(f'No se encontró histórico para {original} en Stooq ni Nasdaq.')
+        frame = pd.DataFrame(rows).rename(columns={'date': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
+        for column in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            if column in frame:
+                frame[column] = frame[column].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False).astype(float)
     frame['Date'] = pd.to_datetime(frame['Date'])
     return frame.dropna(subset=['Open', 'High', 'Low', 'Close']).reset_index(drop=True)
 
