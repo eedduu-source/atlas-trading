@@ -1,4 +1,4 @@
-
+import io
 import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -51,6 +51,8 @@ def stooq_history(symbol):
                 response = requests.get(endpoint, params={'start-date': start.isoformat(), 'end-date': end.isoformat(), 'interval': 'P1D', 'time-frame': 'Daily'}, headers={'User-Agent': 'Mozilla/5.0', 'domain-id': 'www', 'Origin': 'https://www.investing.com', 'Accept': 'application/json'}, timeout=8)
                 payload = response.json() or {}
                 rows = payload.get('data') or []
+                rows = payload.get('data') if isinstance(payload, dict) else []
+                rows = rows if isinstance(rows, list) else []
                 if not rows:
                     return pd.DataFrame()
                 result = pd.DataFrame(rows).rename(columns={'rowDate': 'Date', 'last_open': 'Open', 'last_max': 'High', 'last_min': 'Low', 'last_close': 'Close', 'volume': 'Volume'})
@@ -75,8 +77,12 @@ def stooq_history(symbol):
         response.raise_for_status()
         nasdaq_payload = response.json() or {}
         nasdaq_data = nasdaq_payload.get('data') or {}
+        nasdaq_data = nasdaq_payload.get('data') if isinstance(nasdaq_payload, dict) else {}
+        nasdaq_data = nasdaq_data if isinstance(nasdaq_data, dict) else {}
         trades_table = nasdaq_data.get('tradesTable') or {}
+        trades_table = trades_table if isinstance(trades_table, dict) else {}
         rows = trades_table.get('rows') or []
+        rows = rows if isinstance(rows, list) else []
         if not rows:
             raise ValueError(f'No se encontró histórico para {original} en las fuentes europeas o estadounidenses disponibles.')
         frame = pd.DataFrame(rows).rename(columns={'date': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
@@ -95,6 +101,7 @@ def sec_facts(ticker):
         return None, 'SEC no tiene un CIK coincidente para este ticker.'
     cik = str(match['cik_str']).zfill(10)
     payload = requests.get(f'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json', headers=headers, timeout=20).json() or {}
+    payload = payload if isinstance(payload, dict) else {}
     return (payload.get('facts') or {}).get('us-gaap', {}), payload.get('entityName', ticker)
 
 def latest(facts, names):
