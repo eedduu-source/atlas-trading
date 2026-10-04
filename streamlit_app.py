@@ -14,8 +14,41 @@ st.caption('Precios diarios: Stooq · EE. UU. y mercados europeos · Fundamental
 
 EUROPEAN_MARKETS = ['es', 'ch', 'de', 'fr', 'it', 'nl', 'be', 'pt', 'uk', 'ie', 'se', 'no', 'dk', 'fi', 'at', 'pl', 'cz', 'hu', 'gr', 'ro', 'hr', 'si', 'sk', 'ee', 'lt', 'lv', 'bg', 'cy', 'mt', 'is', 'lu', 'rs', 'tr']
 
+def alpha_vantage_key():
+    try:
+        return st.secrets.get('ALPHAVANTAGE_API_KEY', '')
+    except Exception:
+        return ''
+
+@st.cache_data(ttl=900)
+def alpha_vantage_history(symbol):
+    key = alpha_vantage_key()
+    if not key:
+        return pd.DataFrame()
+    original = symbol.strip().upper()
+    candidates = [original] if '.' in original else [original] + [f'{original}.{market.upper()}' for market in EUROPEAN_MARKETS]
+    for candidate in candidates:
+        try:
+            response = requests.get('https://www.alphavantage.co/query', params={'function': 'TIME_SERIES_DAILY', 'symbol': candidate, 'outputsize': 'full', 'apikey': key}, timeout=20)
+            payload = response.json() or {}
+            series = payload.get('Time Series (Daily)') if isinstance(payload, dict) else None
+            if not isinstance(series, dict) or len(series) < 60:
+                continue
+            rows = [{'Date': day, 'Open': values.get('1. open'), 'High': values.get('2. high'), 'Low': values.get('3. low'), 'Close': values.get('4. close'), 'Volume': values.get('5. volume')} for day, values in series.items()]
+            frame = pd.DataFrame(rows)
+            for column in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                frame[column] = pd.to_numeric(frame[column], errors='coerce')
+            frame['Date'] = pd.to_datetime(frame['Date'])
+            return frame.sort_values('Date').dropna(subset=['Open', 'High', 'Low', 'Close']).reset_index(drop=True)
+        except (requests.RequestException, ValueError, TypeError, KeyError):
+            continue
+    return pd.DataFrame()
+
 @st.cache_data(ttl=900)
 def stooq_history(symbol):
+    alpha_frame = alpha_vantage_history(symbol)
+    if not alpha_frame.empty:
+        return alpha_frame
     original = symbol.strip().upper()
     # Sufijos de mercado usados por Stooq. Se prueba primero EE. UU. y después Europa.
     candidates = [original.lower()] if '.' in original else [f'{original.lower()}.us'] + [f'{original.lower()}.{market}' for market in EUROPEAN_MARKETS]
