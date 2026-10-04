@@ -1,4 +1,4 @@
-import io
+
 import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,12 +12,13 @@ st.set_page_config(page_title='ATLAS · Técnico + Fundamental', layout='wide')
 st.title('ATLAS · Análisis técnico y fundamental')
 st.caption('Precios diarios: Stooq · EE. UU. y mercados europeos · Fundamentales regulatorios: SEC EDGAR cuando aplica · Yahoo Finance no utilizado')
 
+EUROPEAN_MARKETS = ['es', 'ch', 'de', 'fr', 'it', 'nl', 'be', 'pt', 'uk', 'ie', 'se', 'no', 'dk', 'fi', 'at', 'pl', 'cz', 'hu', 'gr', 'ro', 'hr', 'si', 'sk', 'ee', 'lt', 'lv', 'bg', 'cy', 'mt', 'is', 'lu', 'rs', 'tr']
+
 @st.cache_data(ttl=900)
 def stooq_history(symbol):
     original = symbol.strip().upper()
     # Sufijos de mercado usados por Stooq. Se prueba primero EE. UU. y después Europa.
-    european_markets = ['es', 'ch', 'de', 'fr', 'it', 'nl', 'be', 'pt', 'uk', 'ie', 'se', 'no', 'dk', 'fi', 'at', 'pl', 'cz', 'hu', 'gr']
-    candidates = [original.lower()] if '.' in original else [f'{original.lower()}.us'] + [f'{original.lower()}.{market}' for market in european_markets]
+    candidates = [original.lower()] if '.' in original else [f'{original.lower()}.us'] + [f'{original.lower()}.{market}' for market in EUROPEAN_MARKETS]
     end = date.today()
     start = end - timedelta(days=365 * 5)
     url = 'https://stooq.com/q/d/l/'
@@ -42,6 +43,32 @@ def stooq_history(symbol):
                 frame = result
                 break
     if frame.empty or 'Close' not in frame:
+        # Fallback europeo: consulta todas las bolsas cuando el usuario no escribe prefijo.
+        investing_markets = [original.lower().replace('.', ':')] if '.' in original else [f'{original.lower()}:{market}' for market in EUROPEAN_MARKETS]
+        def fetch_investing(market):
+            try:
+                endpoint = f'https://api.investing.com/api/financialdata/historical/stock/{market}'
+                response = requests.get(endpoint, params={'start-date': start.isoformat(), 'end-date': end.isoformat(), 'interval': 'P1D', 'time-frame': 'Daily'}, headers={'User-Agent': 'Mozilla/5.0', 'domain-id': 'www', 'Origin': 'https://www.investing.com', 'Accept': 'application/json'}, timeout=8)
+                payload = response.json() or {}
+                rows = payload.get('data') or []
+                if not rows:
+                    return pd.DataFrame()
+                result = pd.DataFrame(rows).rename(columns={'rowDate': 'Date', 'last_open': 'Open', 'last_max': 'High', 'last_min': 'Low', 'last_close': 'Close', 'volume': 'Volume'})
+                for column in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                    if column in result:
+                        result[column] = pd.to_numeric(result[column], errors='coerce')
+                return result
+            except (requests.RequestException, ValueError, TypeError):
+                return pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=min(20, len(investing_markets))) as pool:
+            pending = [pool.submit(fetch_investing, market) for market in investing_markets]
+            for task in as_completed(pending):
+                result = task.result()
+                if not result.empty and 'Close' in result:
+                    frame = result
+                    break
+
+    if frame.empty or 'Close' not in frame:
         # Fallback gratuito de Nasdaq para acciones y ETF estadounidenses.
         nasdaq_url = f'https://api.nasdaq.com/api/quote/{original}/historical'
         response = requests.get(nasdaq_url, params={'assetclass': 'stocks', 'fromdate': start.isoformat(), 'todate': end.isoformat(), 'limit': 5000}, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/plain, */*'}, timeout=20)
@@ -51,7 +78,7 @@ def stooq_history(symbol):
         trades_table = nasdaq_data.get('tradesTable') or {}
         rows = trades_table.get('rows') or []
         if not rows:
-            raise ValueError(f'No se encontró histórico para {original} en Stooq ni Nasdaq.')
+            raise ValueError(f'No se encontró histórico para {original} en las fuentes europeas o estadounidenses disponibles.')
         frame = pd.DataFrame(rows).rename(columns={'date': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
         for column in ['Open', 'High', 'Low', 'Close', 'Volume']:
             if column in frame:
