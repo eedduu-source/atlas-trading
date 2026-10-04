@@ -1,6 +1,7 @@
 import io
 import math
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 
 import pandas as pd
@@ -20,17 +21,26 @@ def stooq_history(symbol):
     end = date.today()
     start = end - timedelta(days=365 * 5)
     url = 'https://stooq.com/q/d/l/'
-    frame = pd.DataFrame()
-    for symbol in candidates:
+    def fetch_candidate(symbol):
         try:
-            response = requests.get(url, params={'s': symbol, 'i': 'd', 'd1': start.strftime('%Y%m%d'), 'd2': end.strftime('%Y%m%d')}, timeout=8)
+            response = requests.get(url, params={'s': symbol, 'i': 'd', 'd1': start.strftime('%Y%m%d'), 'd2': end.strftime('%Y%m%d')}, timeout=5)
             response.raise_for_status()
             candidate_frame = pd.read_csv(io.StringIO(response.text))
             if not candidate_frame.empty and 'Close' in candidate_frame:
-                frame = candidate_frame
+                return candidate_frame
+        except (requests.RequestException, ValueError, pd.errors.ParserError):
+            return pd.DataFrame()
+        return pd.DataFrame()
+
+    # Consultas paralelas: un mercado caído no bloquea todos los demás.
+    frame = pd.DataFrame()
+    with ThreadPoolExecutor(max_workers=min(20, len(candidates))) as pool:
+        pending = [pool.submit(fetch_candidate, candidate) for candidate in candidates]
+        for task in as_completed(pending):
+            result = task.result()
+            if not result.empty:
+                frame = result
                 break
-        except requests.RequestException:
-            continue
     if frame.empty or 'Close' not in frame:
         # Fallback gratuito de Nasdaq para acciones y ETF estadounidenses.
         nasdaq_url = f'https://api.nasdaq.com/api/quote/{original}/historical'
