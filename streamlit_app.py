@@ -9,23 +9,28 @@ import streamlit as st
 
 st.set_page_config(page_title='ATLAS · Técnico + Fundamental', layout='wide')
 st.title('ATLAS · Análisis técnico y fundamental')
-st.caption('Precios diarios: Stooq · Fundamentales regulatorios: SEC EDGAR · Yahoo Finance no utilizado')
+st.caption('Precios diarios: Stooq · EE. UU. y mercados europeos · Fundamentales regulatorios: SEC EDGAR cuando aplica · Yahoo Finance no utilizado')
 
 @st.cache_data(ttl=900)
 def stooq_history(symbol):
     original = symbol.strip().upper()
-    symbol = original.lower()
-    if '.' not in symbol and symbol not in {'spy', 'qqq'}:
-        symbol = f'{symbol}.us'
+    # Sufijos de mercado usados por Stooq. Se prueba primero EE. UU. y después Europa.
+    european_markets = ['es', 'ch', 'de', 'fr', 'it', 'nl', 'be', 'pt', 'uk', 'ie', 'se', 'no', 'dk', 'fi', 'at', 'pl', 'cz', 'hu', 'gr']
+    candidates = [original.lower()] if '.' in original else [f'{original.lower()}.us'] + [f'{original.lower()}.{market}' for market in european_markets]
     end = date.today()
     start = end - timedelta(days=365 * 5)
     url = 'https://stooq.com/q/d/l/'
-    try:
-        response = requests.get(url, params={'s': symbol, 'i': 'd', 'd1': start.strftime('%Y%m%d'), 'd2': end.strftime('%Y%m%d')}, timeout=8)
-        response.raise_for_status()
-        frame = pd.read_csv(io.StringIO(response.text))
-    except requests.RequestException:
-        frame = pd.DataFrame()
+    frame = pd.DataFrame()
+    for symbol in candidates:
+        try:
+            response = requests.get(url, params={'s': symbol, 'i': 'd', 'd1': start.strftime('%Y%m%d'), 'd2': end.strftime('%Y%m%d')}, timeout=8)
+            response.raise_for_status()
+            candidate_frame = pd.read_csv(io.StringIO(response.text))
+            if not candidate_frame.empty and 'Close' in candidate_frame:
+                frame = candidate_frame
+                break
+        except requests.RequestException:
+            continue
     if frame.empty or 'Close' not in frame:
         # Fallback gratuito de Nasdaq para acciones y ETF estadounidenses.
         nasdaq_url = f'https://api.nasdaq.com/api/quote/{original}/historical'
@@ -50,7 +55,7 @@ def sec_facts(ticker):
         return None, 'SEC no tiene un CIK coincidente para este ticker.'
     cik = str(match['cik_str']).zfill(10)
     payload = requests.get(f'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json', headers=headers, timeout=20).json()
-    return payload.get('facts', {}).get('us-gaap', {}), payload.get('entityName', ticker)
+    return (payload.get('facts') or {}).get('us-gaap', {}), payload.get('entityName', ticker)
 
 def latest(facts, names):
     for name in names:
