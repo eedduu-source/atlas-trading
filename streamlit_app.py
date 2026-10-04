@@ -46,7 +46,10 @@ def stooq_history(symbol):
         nasdaq_url = f'https://api.nasdaq.com/api/quote/{original}/historical'
         response = requests.get(nasdaq_url, params={'assetclass': 'stocks', 'fromdate': start.isoformat(), 'todate': end.isoformat(), 'limit': 5000}, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/plain, */*'}, timeout=20)
         response.raise_for_status()
-        rows = response.json().get('data', {}).get('tradesTable', {}).get('rows', [])
+        nasdaq_payload = response.json() or {}
+        nasdaq_data = nasdaq_payload.get('data') or {}
+        trades_table = nasdaq_data.get('tradesTable') or {}
+        rows = trades_table.get('rows') or []
         if not rows:
             raise ValueError(f'No se encontró histórico para {original} en Stooq ni Nasdaq.')
         frame = pd.DataFrame(rows).rename(columns={'date': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
@@ -59,12 +62,12 @@ def stooq_history(symbol):
 @st.cache_data(ttl=21600)
 def sec_facts(ticker):
     headers = {'User-Agent': 'ATLAS Fundamental Trading research@example.invalid'}
-    tickers = requests.get('https://www.sec.gov/files/company_tickers.json', headers=headers, timeout=20).json()
+    tickers = requests.get('https://www.sec.gov/files/company_tickers.json', headers=headers, timeout=20).json() or {}
     match = next((item for item in tickers.values() if item['ticker'].upper() == ticker.upper()), None)
     if not match:
         return None, 'SEC no tiene un CIK coincidente para este ticker.'
     cik = str(match['cik_str']).zfill(10)
-    payload = requests.get(f'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json', headers=headers, timeout=20).json()
+    payload = requests.get(f'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json', headers=headers, timeout=20).json() or {}
     return (payload.get('facts') or {}).get('us-gaap', {}), payload.get('entityName', ticker)
 
 def latest(facts, names):
